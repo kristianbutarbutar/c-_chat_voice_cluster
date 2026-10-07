@@ -6,6 +6,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <algorithm>
+#include <csignal> // Required for signal handling
 
 VoiceServerMaster::VoiceServerMaster(std::string cfg_path)
     : config_filepath(std::move(cfg_path)),
@@ -136,7 +137,7 @@ void VoiceServerMaster::runP1Server()
 
             if (!is_active_primary) {
                 std::string err_resp = "{\"status\":\"error\",\"message\":\"Master instance is in standby mode\"}";
-                send(client_sock, err_resp.c_str(), err_resp.length(), 0);
+                send(client_sock, err_resp.c_str(), err_resp.length(), MSG_NOSIGNAL); // Safe write
                 close(client_sock);
                 return;
             }
@@ -158,10 +159,7 @@ void VoiceServerMaster::runP1Server()
             std::string uid = extractField(payload, "uid");
 
             if (action == "start_voice_call" && !uid.empty()) {
-                // Generate canonical room ID
                 std::string room_id = "ROOM_" + uid;
-
-                // Load balanced target voice node
                 VoiceNodeInfo assigned_node = getNextVoiceNode();
 
                 std::ostringstream resp;
@@ -171,11 +169,11 @@ void VoiceServerMaster::runP1Server()
                      << "\"room_id\":\"" << room_id << "\"}";
 
                 std::string resp_str = resp.str();
-                send(client_sock, resp_str.c_str(), resp_str.length(), 0);
+                send(client_sock, resp_str.c_str(), resp_str.length(), MSG_NOSIGNAL); // Safe write
                 std::cout << "[MASTER P1] Assigned Room " << room_id << " to Voice Node " << assigned_node.host << ":" << assigned_node.port << std::endl;
             } else {
                 std::string err_resp = "{\"status\":\"error\",\"message\":\"Invalid request action\"}";
-                send(client_sock, err_resp.c_str(), err_resp.length(), 0);
+                send(client_sock, err_resp.c_str(), err_resp.length(), MSG_NOSIGNAL); // Safe write
             }
 
             close(client_sock); })
@@ -191,9 +189,7 @@ void VoiceServerMaster::runP2Heartbeat()
 
     while (running)
     {
-        // Broadcast heartbeat ping or check peer status via P2 socket
         std::this_thread::sleep_for(std::chrono::minutes(heartbeat_interval_min));
-        // Simulated heartbeat pulse
         std::cout << "[MASTER P2] [" << instance_id << "] Heartbeat sync pulse emitted." << std::endl;
     }
 }
@@ -212,6 +208,9 @@ void VoiceServerMaster::start()
 
 int main()
 {
+    // Ignore SIGPIPE globally to prevent process termination on dropped connections[cite: 17]
+    signal(SIGPIPE, SIG_IGN);
+
     VoiceServerMaster master("voice_server_master.cfg");
     master.start();
     return 0;
